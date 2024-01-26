@@ -65,11 +65,22 @@ namespace NetworkServer
 
         public static Message FromBytes(byte[] data)
         {
-            using (MemoryStream stream = new MemoryStream(data))
+            Message message;
+
+            try
             {
-                BinaryFormatter formatter = new BinaryFormatter();
-                return (Message)formatter.Deserialize(stream);
+                using (MemoryStream stream = new MemoryStream(data))
+                {
+                    BinaryFormatter formatter = new BinaryFormatter();
+                    message = (Message)formatter.Deserialize(stream);
+                }
             }
+            catch(Exception e) 
+            {
+                message = new Message(MessageType.String, "Fehlerhafte Nachricht");
+            }
+
+            return message;
         }
     }
 

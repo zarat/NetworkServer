@@ -89,6 +89,13 @@ namespace NetworkServer
             receiveThread.Start();
         }
 
+        public void Stop()
+        {
+            running = false;
+            udpServer.Close();
+            receiveThread.Join();
+        }
+
         private void ReceiveData()
         {
 

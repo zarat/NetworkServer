@@ -33,7 +33,7 @@ client.Close();
 UDPServer server = new UDPServer(1337);
 server.MessageReceived += MyMessageReceived;
 
-void MyMessageReceived(Message, message) { }
+void MyMessageReceived(Message message) { }
 ```
 
 ```CSharp

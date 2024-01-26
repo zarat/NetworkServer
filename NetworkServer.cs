@@ -1,93 +1,36 @@
+using System.Collections;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
+using System.Numerics;
 using System.Runtime.Serialization.Formatters.Binary;
 
 namespace NetworkServer
 {
 
-    public enum MessageType
-    {
-        String,
-        Int,
-        Float,
-        Vector3
-    }
-
-    [Serializable]
-    public struct Vector3
-    {
-        public float X { get; set; }
-        public float Y { get; set; }
-        public float Z { get; set; }
-
-        public Vector3(float x, float y, float z)
-        {
-            X = x;
-            Y = y;
-            Z = z;
-        }
-    }
-
-    [Serializable]
-    public class Message
-    {
-
-        public MessageType Type { get; set; }
-        public string Content { get; set; }
-        public int IntValue { get; set; }
-        public float FloatValue { get; set; }
-        public Vector3 VectorValue { get; set; }
-
-        public Message(MessageType type, string content = "", int intValue = 0, float floatValue = 0.0f, Vector3 vectorValue = default(Vector3))
-        {
-            Type = type;
-            Content = content;
-            IntValue = intValue;
-            FloatValue = floatValue;
-            VectorValue = vectorValue;
-        }
-
-        public byte[] ToBytes()
-        {
-            using (MemoryStream stream = new MemoryStream())
-            {
-                BinaryFormatter formatter = new BinaryFormatter();
-                formatter.Serialize(stream, this);
-                return stream.ToArray();
-            }
-        }
-
-        public static Message FromBytes(byte[] data)
-        {
-            Message message;
-
-            try
-            {
-                using (MemoryStream stream = new MemoryStream(data))
-                {
-                    BinaryFormatter formatter = new BinaryFormatter();
-                    message = (Message)formatter.Deserialize(stream);
-                }
-            }
-            catch(Exception e) 
-            {
-                message = new Message(MessageType.String, "Fehlerhafte Nachricht");
-            }
-
-            return message;
-        }
-    }
-
+    /// <summary>
+    /// A custom message object
+    /// </summary>
+    /// <typeparam name="T">The type it has.</typeparam>
     [Serializable]
     public class Message<T>
     {
-        public T Content { get; set; }
-        public MessageType Type { get; set; }
 
-        public Message(MessageType type, T content)
+        public T Content { get; set; }
+
+        //public Message(string type, T content)
+        public Message(T content)
         {
-            Type = type;
+            //Type = type;
             Content = content;
+        }
+
+        private bool IsValidStructType()
+        {
+            Type contentType = typeof(T);
+            List<Type> registeredStructs = MessageTypeRegistry.Instance.GetRegisteredMessageTypes();
+
+            return registeredStructs.Contains(contentType);
         }
 
         public byte[] ToBytes()
@@ -110,27 +53,112 @@ namespace NetworkServer
                 {
                     BinaryFormatter formatter = new BinaryFormatter();
                     message = (Message<T>)formatter.Deserialize(stream);
+
+                    if (!message.IsValidStructType())
+                    {
+                        throw new InvalidOperationException($"Unregistered struct type: {typeof(T)}");
+                    }
                 }
             }
             catch (Exception e)
             {
-                // Handle deserialization error
-                message = new Message<T>(MessageType.String, default(T));
+
+                message = null; 
+
             }
 
             return message;
         }
+
     }
 
+    /// <summary>
+    /// Register message types.
+    /// </summary>
+    public class MessageTypeRegistry
+    {
+
+        /// <summary>
+        /// A list of registered message types
+        /// </summary>
+        private List<Type> registeredMessageTypes;
+
+        /// <summary>
+        /// Make it a singleton
+        /// </summary>
+        private static MessageTypeRegistry instance;
+
+        /// <summary>
+        /// Get the instance
+        /// </summary>
+        public static MessageTypeRegistry Instance
+        {
+            get
+            {
+                if (instance == null)
+                {
+                    instance = new MessageTypeRegistry();
+                }
+                return instance;
+            }
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// \todo Standard types?
+        private MessageTypeRegistry()
+        {
+            registeredMessageTypes = new List<Type>();
+            RegisterMessageType(typeof(Vector3));
+        }
+
+        /// <summary>
+        /// Register a message type.
+        /// </summary>
+        /// <param name="structType"></param>
+        /// <exception cref="ArgumentException"></exception>
+        public void RegisterMessageType(Type structType)
+        {
+            if (structType.IsValueType && !structType.IsPrimitive)
+            {
+                registeredMessageTypes.Add(structType);
+            }
+            else
+            {
+                //throw new ArgumentException($"{structType.FullName} is not a valid message type.");
+            }
+        }
+
+        /// <summary>
+        /// Get a list of registered message types
+        /// </summary>
+        /// <returns></returns>
+        public List<Type> GetRegisteredMessageTypes()
+        {
+            return registeredMessageTypes;
+        }
+    
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
     public class UDPServer
     {
 
         private UdpClient udpServer;
+        private int port;
         private Thread receiveThread;
 
         private bool running;
 
-        public UDPServer(int port)
+        public UDPServer(int _port)
+        {
+            port = _port;
+        }
+
+        public void Start()
         {
             udpServer = new UdpClient(port);
             receiveThread = new Thread(new ThreadStart(ReceiveData));
@@ -138,6 +166,10 @@ namespace NetworkServer
             receiveThread.Start();
         }
 
+        /// <summary>
+        /// Stop listening
+        /// </summary>
+        /// \todo How to properly stop it?
         public void Stop()
         {
             running = false;
@@ -147,29 +179,66 @@ namespace NetworkServer
             receiveThread.Join();
         }
 
-
+        /// <summary>
+        /// The event OnMessageReceived is fired when a valid Message is received.
+        /// The event OnMessageReceiveError is fired when some random data was received.
+        /// </summary>
         private void ReceiveData()
         {
 
-            while (running)
+            try
             {
-                IPEndPoint clientEndPoint = new IPEndPoint(IPAddress.Any, 0);
-                byte[] data = udpServer.Receive(ref clientEndPoint);
-                Message receivedMessage = Message.FromBytes(data);
-                OnMessageReceived(receivedMessage);
+
+                while (running)
+                {
+
+                    IPEndPoint clientEndPoint = new IPEndPoint(IPAddress.Any, 0);
+                    byte[] data = udpServer.Receive(ref clientEndPoint);
+
+                    if (data == null)
+                    {
+                        OnMessageReceivedError(data);
+                    }
+                    else
+                        OnMessageReceived(data);
+
+                }
+
+            }
+            catch (SocketException)
+            {
+                // Ignore timeout exception, check the running flag, and continue the loop
             }
 
         }
 
-        protected virtual void OnMessageReceived(Message message)
+        /// <summary>
+        /// This event gets fired when a new message is received.
+        /// </summary>
+        /// <param name="message"></param>
+        protected virtual void OnMessageReceived(byte[] message)
         {
             MessageReceived?.Invoke(message);
         }
 
-        public event Action<Message> MessageReceived;
+        public event Action<byte[]> MessageReceived;
+
+        /// <summary>
+        /// This event gets fired when data is received but its not in a valid format.
+        /// </summary>
+        /// <param name="message"></param>
+        protected virtual void OnMessageReceivedError(object packet)
+        {
+            MessageReceivedError?.Invoke(packet);
+        }
+
+        public event Action<object> MessageReceivedError;
 
     }
 
+    /// <summary>
+    /// 
+    /// </summary>
     public class UDPClient
     {
         private UdpClient udpClient;
@@ -179,34 +248,91 @@ namespace NetworkServer
             udpClient = new UdpClient();
         }
 
-        public void SendMessage(Message message, string serverIp, int serverPort)
+        public void SendMessage(byte[] message, string serverIp, int serverPort)
         {
-            byte[] data = message.ToBytes();
-            udpClient.Send(data, data.Length, serverIp, serverPort);
+            udpClient.Send(message, message.Length, serverIp, serverPort);
         }
     }
 
+    /// <summary>
+    /// 
+    /// </summary>
     public class TCPServer
     {
 
+        /// <summary>
+        /// The listening socket
+        /// </summary>
         private TcpListener tcpListener;
+
+        /// <summary>
+        /// The listening socket runs on its own thread.
+        /// </summary>
         private Thread listenerThread;
+
+        /// <summary>
+        /// A list of all connected clients.
+        /// </summary>
         private List<TcpClient> connectedClients = new List<TcpClient>();
+
+        /// <summary>
+        /// The running port
+        /// </summary>
         private int port;
+
+        /// <summary>
+        /// If the server is running.
+        /// </summary>
         private bool running;
 
+        /// <summary>
+        /// The maximum receive size for a packet.
+        /// </summary>
+        public int maxReveiveSize = 4096;
+
+        /// <summary>
+        /// The maximum size of connected clients.
+        /// </summary>
+        public int maxClientSize = 8;
+
+        /// <summary>
+        /// Create a TCP Server on the specified port.
+        /// </summary>
+        /// <param name="_port">The port to listen on.</param>
         public TCPServer(int _port)
         {
             port = _port;
-            tcpListener = new TcpListener(IPAddress.Any, _port);
-            listenerThread = new Thread(new ThreadStart(ListenForClients));
+        }
+
+        /// <summary>
+        /// Start listening for clients.
+        /// </summary>
+        public void Start()
+        {
+            tcpListener = new TcpListener(System.Net.IPAddress.Any, port);
             running = true;
+            listenerThread = new Thread(new ThreadStart(ListenForClients));
+            
             listenerThread.Start();
         }
 
+        /// <summary>
+        /// Just set running to false.
+        /// </summary>
+        /// \todo Anything else here?
+        public void Stop()
+        {
+            running = false;
+        }
+
+        /// <summary>
+        /// Runs on its own thread. Listen for new clients. 
+        /// When a new client connects it raises the event OnClientConnect. 
+        /// If a client disconnects it raises the event OnClientDisconnect.
+        /// </summary>
+        /// \todo Exception? SocketTimeout
         private void ListenForClients()
         {
-
             tcpListener.Start();
 
             while (running)
@@ -216,134 +342,130 @@ namespace NetworkServer
                     continue;
                 }
 
-                TcpClient client = tcpListener.AcceptTcpClient();  // Stelle sicher, dass tcpListener.Stop() nicht aufgerufen wird, wenn dieser Aufruf blockiert
-                OnClientConnect(client);
+                TcpClient client = tcpListener.AcceptTcpClient();
+
                 connectedClients.Add(client);
 
-                Thread clientThread = new Thread(new ParameterizedThreadStart(HandleClientComm));
+                Thread clientThread = new Thread(new ParameterizedThreadStart(HandleClient));
                 clientThread.Start(client);
+                OnClientConnect(client);
             }
 
             tcpListener.Stop();
-
         }
 
-        public void StopListening()
-        {
-
-            running = false;
-
-            // Stoppe den Listener-Thread
-            tcpListener.Stop();
-
-            // Warte darauf, dass der Listener-Thread endet
-            listenerThread.Join();
-
-            // Schließe alle verbundenen Clients
-            foreach (TcpClient client in connectedClients)
-            {
-                client.Close();
-            }
-
-
-        }
-
-        private void HandleClientComm(object clientObj)
+        /// <summary>
+        /// Runs on its own thread. Handles the communication with the client. When a message is received it raises the event OnMessageReceived.
+        /// If the received data was not a registered struct or some random bytes it raises the event OnMessageReceivedError.
+        /// </summary>
+        /// <param name="clientObj"></param>
+        private void HandleClient(object clientObj)
         {
             TcpClient tcpClient = (TcpClient)clientObj;
             NetworkStream clientStream = tcpClient.GetStream();
 
-            byte[] messageBuffer = new byte[4096];
+            byte[] messageBuffer = new byte[maxReveiveSize];
             int bytesRead;
 
-            while (running)
+            try
             {
-                bytesRead = 0;
-
-                try
+                while (running)
                 {
-                    bytesRead = clientStream.Read(messageBuffer, 0, 4096);
+                    bytesRead = clientStream.Read(messageBuffer, 0, maxReveiveSize);
+
+                    if (bytesRead == 0)
+                        break;
+
+                    if (messageBuffer == null)
+                    {
+                        OnMessageReceivedError(messageBuffer);
+                    }
+                    else
+                        OnMessageReceived(messageBuffer, tcpClient);
                 }
-                catch
-                {
-                    break;
-                }
-
-                if (bytesRead == 0)
-                    break;
-
-                Message receivedMessage = Message.FromBytes(messageBuffer);
-                OnMessageReceived(receivedMessage, tcpClient);
-
-                /*
-                Message responseMessage = new Message(MessageType.String, "Server has received your message: " + receivedMessage.Content);
-                SendMessageToClient(tcpClient, responseMessage);
-                */
-
             }
-
-            connectedClients.Remove(tcpClient);
-            OnClientDisconnect(tcpClient);
-            tcpClient.Close();
-        }
-
-        private void SendMessageToClient(TcpClient client, Message message)
-        {
-            NetworkStream clientStream = client.GetStream();
-            byte[] messageBytes = message.ToBytes();
-            clientStream.Write(messageBytes, 0, messageBytes.Length);
-        }
-
-        public void SendMessageToAllClients(Message message)
-        {
-            byte[] messageBytes = message.ToBytes();
-            foreach (TcpClient client in connectedClients)
+            catch
             {
-                NetworkStream clientStream = client.GetStream();
-                clientStream.Write(messageBytes, 0, messageBytes.Length);
+                // Handle exceptions as needed
             }
-        }
-
-        public void SendMessageToAllClientsExceptSender(Message message, TcpClient sender)
-        {
-            byte[] messageBytes = message.ToBytes();
-            foreach (TcpClient client in connectedClients)
+            finally
             {
-                if (client == sender)
-                    continue;
-                NetworkStream clientStream = client.GetStream();
-                clientStream.Write(messageBytes, 0, messageBytes.Length);
+                // Close the client stream and wait for it to be fully closed
+                clientStream.Close();
+                tcpClient.Close();
+
+                // Ensure that the client is fully disconnected before proceeding
+                OnClientDisconnect(tcpClient);
+
+                connectedClients.Remove(tcpClient);
             }
         }
 
-        public void StartListening()
-        {
-            // Implement your game logic here for the server
-        }
-
+        /// <summary>
+        /// When a new client connects
+        /// </summary>
+        /// <param name="client">The TcpClient that has connected.</param>
         protected virtual void OnClientConnect(TcpClient client)
         {
             ClientConnect?.Invoke(client);
         }
 
+        /// <summary>
+        /// When a new client connects
+        /// </summary>
+        /// <param name="client">The TcpClient that has connected.</param>
         public event Action<TcpClient> ClientConnect;
 
-        protected virtual void OnMessageReceived(Message message, TcpClient client)
-        {
-            MessageReceived?.Invoke(message, client);
-        }
-
-        public event Action<Message, TcpClient> MessageReceived;
-
+        /// <summary>
+        /// When a client disconnects
+        /// </summary>
+        /// <param name="client">The TcpClient that has disconnected.</param>
         protected virtual void OnClientDisconnect(TcpClient client)
         {
             ClientDisconnect?.Invoke(client);
         }
 
+        /// <summary>
+        /// When a client disconnects
+        /// </summary>
+        /// <param name="client">The TcpClient that has disconnected.</param>
         public event Action<TcpClient> ClientDisconnect;
+
+        /// <summary>
+        /// When a message is received.
+        /// </summary>
+        /// <param name="message">The Message Object.</param>
+        /// <param name="client">The TcpClient from which the message was received.</param>
+        protected virtual void OnMessageReceived(byte[] message, TcpClient client)
+        {
+            MessageReceived?.Invoke(message, client);
+        }
+
+        /// <summary>
+        /// When a message is received.
+        /// </summary>
+        public event Action<byte[], TcpClient> MessageReceived;
+
+        /// <summary>
+        /// When a message could not have been evaluated as registered Message.
+        /// </summary>
+        /// <param name="packet">The received packet as byte[]</param>
+        protected virtual void OnMessageReceivedError(byte[] packet)
+        {
+            MessageReceivedError?.Invoke(packet);
+        }
+
+        /// <summary>
+        /// When a message could not have been evaluated as registered Message.
+        /// </summary>
+        public event Action<byte[]> MessageReceivedError;
+
 
     }
 
+    /// <summary>
+    /// 
+    /// </summary>
     public class TCPClient
     {
 
@@ -354,24 +476,37 @@ namespace NetworkServer
         private string ip;
         private int port;
 
-        public TCPClient(string ip, int port)
+        private bool running = false;
+
+        public TCPClient(string _ip, int _port)
         {
-            this.tcpClient = new TcpClient();
-            this.clientThread = new Thread(new ThreadStart(ConnectToServer));
-            this.clientThread.Start();
-            this.ip = ip;
-            this.port = port;
+            ip = _ip;
+            port = _port;
+        }
+
+        public void Start()
+        {
+            tcpClient = new TcpClient();
+            running = true;
+            clientThread = new Thread(new ThreadStart(ConnectToServer));
+            
+            clientThread.Start();
+
+            while (clientStream == null)
+            {
+                Thread.Sleep(10);
+            }
         }
 
         private void ConnectToServer()
         {
-            this.tcpClient.Connect(this.ip, this.port);
-            this.clientStream = this.tcpClient.GetStream();
+            tcpClient.Connect(this.ip, this.port);
+            clientStream = this.tcpClient.GetStream();
 
             byte[] serverResponseBuffer = new byte[4096];
             int bytesRead;
 
-            while (true)
+            while (running)
             {
                 bytesRead = 0;
 
@@ -387,13 +522,12 @@ namespace NetworkServer
                 if (bytesRead == 0)
                     break;
 
-                Message serverResponse = Message.FromBytes(serverResponseBuffer);
-                OnMessageReceived(serverResponse);
+                OnMessageReceived(serverResponseBuffer);
 
             }
         }
 
-        public void Close()
+        public void Stop()
         {
             tcpClient.Close();
         }
@@ -410,31 +544,52 @@ namespace NetworkServer
 
         public int Port { get { return this.port; } }
 
-        protected virtual void OnMessageReceived(Message message)
+        /// <summary>
+        /// Fired when a new message was received.
+        /// </summary>
+        /// <param name="message"></param>
+        protected virtual void OnMessageReceived(byte[] message)
         {
             MessageReceived?.Invoke(message);
         }
 
-        public event Action<Message> MessageReceived;
+        /// <summary>
+        /// Fired when a new message was received.
+        /// </summary>
+        public event Action<byte[]> MessageReceived;
 
-        // Methode zum Senden von Nachrichten an den Server
-        public void SendMessageToServer(Message message)
+        /// <summary>
+        /// Send a message to the server.
+        /// </summary>
+        /// <param name="message"></param>
+        public void SendMessageToServer(byte[] message)
         {
-            byte[] messageBytes = message.ToBytes();
-            clientStream.Write(messageBytes, 0, messageBytes.Length);
+            clientStream.Write(message, 0, message.Length);
         }
 
     }
 
+    /// <summary>
+    /// Receive UDP messages.
+    /// Event OnMessageReceived is fired when a message is received.
+    /// Event OnMessageReceivedError is fired when a message could not have been received or was in a wrong format.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
     public class UDPServer<T>
     {
 
         private UdpClient udpServer;
+        private int port;
         private Thread receiveThread;
 
         private bool running;
 
-        public UDPServer(int port)
+        public UDPServer(int _port)
+        {
+            port = _port;
+        }
+
+        public void Start()
         {
             udpServer = new UdpClient(port);
             receiveThread = new Thread(new ThreadStart(ReceiveData));
@@ -442,6 +597,10 @@ namespace NetworkServer
             receiveThread.Start();
         }
 
+        /// <summary>
+        /// Stop listening
+        /// </summary>
+        /// \todo How to properly stop it?
         public void Stop()
         {
             running = false;
@@ -451,20 +610,45 @@ namespace NetworkServer
             receiveThread.Join();
         }
 
-
+        /// <summary>
+        /// The event OnMessageReceived is fired when a valid Message is received.
+        /// The event OnMessageReceiveError is fired when some random data was received.
+        /// </summary>
         private void ReceiveData()
         {
 
-            while (running)
+            try
             {
-                IPEndPoint clientEndPoint = new IPEndPoint(IPAddress.Any, 0);
-                byte[] data = udpServer.Receive(ref clientEndPoint);
-                Message<T> receivedMessage = Message<T>.FromBytes(data);
-                OnMessageReceived(receivedMessage);
+
+                while (running)
+                {
+
+                    IPEndPoint clientEndPoint = new IPEndPoint(IPAddress.Any, 0);
+                    byte[] data = udpServer.Receive(ref clientEndPoint);
+
+                    Message<T> receivedMessage = Message<T>.FromBytes(data);
+
+                    if (receivedMessage == null)
+                    {
+                        OnMessageReceivedError(data);
+                    }
+                    else
+                        OnMessageReceived(receivedMessage);
+
+                }
+
+            }
+            catch (SocketException)
+            {
+                // Ignore timeout exception, check the running flag, and continue the loop
             }
 
         }
 
+        /// <summary>
+        /// This event gets fired when a new message is received.
+        /// </summary>
+        /// <param name="message"></param>
         protected virtual void OnMessageReceived(Message<T> message)
         {
             MessageReceived?.Invoke(message);
@@ -472,8 +656,23 @@ namespace NetworkServer
 
         public event Action<Message<T>> MessageReceived;
 
+        /// <summary>
+        /// This event gets fired when data is received but its not in a valid format.
+        /// </summary>
+        /// <param name="message"></param>
+        protected virtual void OnMessageReceivedError(byte[] packet)
+        {
+            MessageReceivedError?.Invoke(packet);
+        }
+
+        public event Action<byte[]> MessageReceivedError;
+
     }
 
+    /// <summary>
+    /// Send a UDP message.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
     public class UDPClient<T>
     {
         private UdpClient udpClient;
@@ -490,23 +689,90 @@ namespace NetworkServer
         }
     }
 
+    /// <summary>
+    /// Receive TCP clients.
+    /// 
+    /// Event ClientConnect is fired when a new client connects.
+    /// Event ClientDisconnected is fired when a client disconnects.
+    /// Event MessageReceived is fired when a message is received.
+    /// Event MessageReceivedError is fired when a message could not have been received or was in a wrong format.
+    /// </summary>
+    /// \todo OnListenerStop event
+    /// \todo Donst automatically start to listen
+    /// <typeparam name="T">The type of Message it handles.</typeparam>
     public class TCPServer<T>
     {
+
+        /// <summary>
+        /// The listening socket
+        /// </summary>
         private TcpListener tcpListener;
+
+        /// <summary>
+        /// The listening socket runs on its own thread.
+        /// </summary>
         private Thread listenerThread;
+
+        /// <summary>
+        /// A list of all connected clients.
+        /// </summary>
         private List<TcpClient> connectedClients = new List<TcpClient>();
+
+        /// <summary>
+        /// The running port
+        /// </summary>
         private int port;
+
+        /// <summary>
+        /// If the server is running.
+        /// </summary>
         private bool running;
 
+        /// <summary>
+        /// The maximum receive size for a packet.
+        /// </summary>
+        public int maxReveiveSize = 4096;
+
+        /// <summary>
+        /// The maximum size of connected clients.
+        /// </summary>
+        public int maxClientSize = 8;
+
+        /// <summary>
+        /// Create a TCP Server on the specified port.
+        /// </summary>
+        /// <param name="_port">The port to listen on.</param>
         public TCPServer(int _port)
         {
-            port = _port;
-            tcpListener = new TcpListener(System.Net.IPAddress.Any, _port);
+            port = _port;         
+        }
+
+        /// <summary>
+        /// Start listening for clients.
+        /// </summary>
+        public void Start()
+        {
+            tcpListener = new TcpListener(System.Net.IPAddress.Any, port);
             listenerThread = new Thread(new ThreadStart(ListenForClients));
             running = true;
             listenerThread.Start();
         }
 
+        /// <summary>
+        /// Just set running to false.
+        /// </summary>
+        /// \todo Anything else here?
+        public void Stop()
+        {
+            running = false;
+        }
+
+        /// <summary>
+        /// Runs on its own thread. Listen for new clients. 
+        /// When a new client connects it raises the event OnClientConnect. 
+        /// If a client disconnects it raises the event OnClientDisconnect.
+        /// </summary>
+        /// \todo Exception? SocketTimeout
         private void ListenForClients()
         {
             tcpListener.Start();
@@ -522,69 +788,136 @@ namespace NetworkServer
                 
                 connectedClients.Add(client);
 
-                Thread clientThread = new Thread(new ParameterizedThreadStart(HandleClientComm));
+                Thread clientThread = new Thread(new ParameterizedThreadStart(HandleClient));
                 clientThread.Start(client);
+                OnClientConnect(client);
             }
 
             tcpListener.Stop();
         }
 
-        // Rest des TCPServer-Codes bleibt unverändert ...
-
-        private void HandleClientComm(object clientObj)
+        /// <summary>
+        /// Runs on its own thread. Handles the communication with the client. When a message is received it raises the event OnMessageReceived.
+        /// If the received data was not a registered struct or some random bytes it raises the event OnMessageReceivedError.
+        /// </summary>
+        /// <param name="clientObj"></param>
+        private void HandleClient(object clientObj)
         {
             TcpClient tcpClient = (TcpClient)clientObj;
             NetworkStream clientStream = tcpClient.GetStream();
 
-            byte[] messageBuffer = new byte[4096];
+            byte[] messageBuffer = new byte[maxReveiveSize];
             int bytesRead;
 
-            while (running)
+            try
             {
-                bytesRead = 0;
-
-                try
+                while (running)
                 {
-                    bytesRead = clientStream.Read(messageBuffer, 0, 4096);
+                    bytesRead = clientStream.Read(messageBuffer, 0, maxReveiveSize);
+
+                    if (bytesRead == 0)
+                        break;
+
+                    Message<T> receivedMessage = Message<T>.FromBytes(messageBuffer);
+
+                    if (receivedMessage == null)
+                    {
+                        OnMessageReceivedError( messageBuffer );
+                    }
+                    else
+                        OnMessageReceived(receivedMessage, tcpClient);
                 }
-                catch
-                {
-                    break;
-                }
-
-                if (bytesRead == 0)
-                    break;
-
-                Message<T> receivedMessage = Message<T>.FromBytes(messageBuffer);
-                OnMessageReceived(receivedMessage, tcpClient);
-
-                /*
-                Message responseMessage = new Message(MessageType.String, "Server has received your message: " + receivedMessage.Content);
-                SendMessageToClient(tcpClient, responseMessage);
-                */
-
             }
+            catch
+            {
+                // Handle exceptions as needed
+            }
+            finally
+            {
+                // Close the client stream and wait for it to be fully closed
+                clientStream.Close();
+                tcpClient.Close();
 
-            connectedClients.Remove(tcpClient);
-            ClientDisconnect(tcpClient);
-            tcpClient.Close();
+                // Ensure that the client is fully disconnected before proceeding
+                OnClientDisconnect(tcpClient);
+
+                connectedClients.Remove(tcpClient);
+            }
         }
 
+        /// <summary>
+        /// When a new client connects
+        /// </summary>
+        /// <param name="client">The TcpClient that has connected.</param>
+        protected virtual void OnClientConnect(TcpClient client)
+        {
+            ClientConnect?.Invoke(client);
+        }
+
+        /// <summary>
+        /// When a new client connects
+        /// </summary>
+        /// <param name="client">The TcpClient that has connected.</param>
+        public event Action<TcpClient> ClientConnect;
+
+        /// <summary>
+        /// When a client disconnects
+        /// </summary>
+        /// <param name="client">The TcpClient that has disconnected.</param>
         protected virtual void OnClientDisconnect(TcpClient client)
         {
             ClientDisconnect?.Invoke(client);
         }
 
+        /// <summary>
+        /// When a client disconnects
+        /// </summary>
+        /// <param name="client">The TcpClient that has disconnected.</param>
         public event Action<TcpClient> ClientDisconnect;
 
+        /// <summary>
+        /// When a message is received.
+        /// </summary>
+        /// <param name="message">The Message Object.</param>
+        /// <param name="client">The TcpClient from which the message was received.</param>
         protected virtual void OnMessageReceived(Message<T> message, TcpClient client)
         {
             MessageReceived?.Invoke(message, client);
         }
 
+        /// <summary>
+        /// When a message is received.
+        /// </summary>
+        /// <param name="message">The Message Object.</param>
+        /// <param name="client">The TcpClient from which the message was received.</param>
         public event Action<Message<T>, TcpClient> MessageReceived;
+
+        /// <summary>
+        /// When a message could not have been evaluated as registered Message.
+        /// </summary>
+        /// \todo Change object to byte[]
+        /// <param name="packet">The received packet as byte[]</param>
+        protected virtual void OnMessageReceivedError(byte[] packet)
+        {
+            MessageReceivedError?.Invoke(packet);
+        }
+
+        /// <summary>
+        /// When a message could not have been evaluated as registered Message.
+        /// </summary>
+        /// \todo Change object to byte[]
+        /// <param name="packet">The received packet as byte[]</param>
+        public event Action<byte[]> MessageReceivedError;
+
+        
     }
 
+    /// <summary>
+    /// Connect to a TCP server.
+    /// Fires the event OnMessageReceived.
+    /// </summary>
+    /// \todo Error handling when message has invalid format.
+    /// <typeparam name="T">The type it handles.</typeparam>
     public class TCPClient<T>
     {
 
@@ -592,27 +925,39 @@ namespace NetworkServer
         private Thread clientThread;
         private NetworkStream clientStream;
 
+        private bool running = false;
+
         private string ip;
         private int port;
 
-        public TCPClient(string ip, int port)
+        public TCPClient(string _ip, int _port)
         {
-            this.tcpClient = new TcpClient();
-            this.clientThread = new Thread(new ThreadStart(ConnectToServer));
-            this.clientThread.Start();
-            this.ip = ip;
-            this.port = port;
+            ip = _ip;
+            port = _port;
+        }
+
+        public void Start()
+        {
+            tcpClient = new TcpClient();
+            running = true;
+            clientThread = new Thread(new ThreadStart(ConnectToServer));
+            clientThread.Start();
+
+            while (clientStream == null)
+            {
+                Thread.Sleep(10);
+            }
         }
 
         private void ConnectToServer()
         {
-            this.tcpClient.Connect(this.ip, this.port);
-            this.clientStream = this.tcpClient.GetStream();
+            tcpClient.Connect(this.ip, this.port);
+            clientStream = this.tcpClient.GetStream();
 
             byte[] serverResponseBuffer = new byte[4096];
             int bytesRead;
 
-            while (true)
+            while (running)
             {
                 bytesRead = 0;
 
@@ -634,7 +979,7 @@ namespace NetworkServer
             }
         }
 
-        public void Close()
+        public void Stop()
         {
             tcpClient.Close();
         }
@@ -651,14 +996,24 @@ namespace NetworkServer
 
         public int Port { get { return this.port; } }
 
+        /// <summary>
+        /// Fired when a new message was received.
+        /// </summary>
+        /// <param name="message"></param>
         protected virtual void OnMessageReceived(Message<T> message)
         {
             MessageReceived?.Invoke(message);
         }
 
+        /// <summary>
+        /// Fired when a new message was received.
+        /// </summary>
         public event Action<Message<T>> MessageReceived;
 
-        // Methode zum Senden von Nachrichten an den Server
+        /// <summary>
+        /// Send a message to the server.
+        /// </summary>
+        /// <param name="message"></param>
         public void SendMessageToServer(Message<T> message)
         {
             byte[] messageBytes = message.ToBytes();

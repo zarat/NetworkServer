@@ -42,3 +42,18 @@ private void MyMessageReceived(Message message)
 
 client.Close();
 ```
+
+```CSharp
+UDPServer server = new UDPServer(1337);
+server.MessageReceived += MyMessageReceived;
+
+private void MyMessageReceived(Message, message)
+{
+    // ..
+}
+```
+
+```CSharp
+UDPClient client = new UDPClient();
+client.SendMessage(new Message(MessageType.String, ""), "127.0.0.1", 1337);
+```

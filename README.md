@@ -9,11 +9,11 @@ server.ClientConnect += MyClientConnect;
 server.ClientDisconnect += MyClientDisconnect;
 server.MessageReceived += MyMessageReceived;
 
-private void MyClientConnect(TcpClient client) { }
+void MyClientConnect(TcpClient client) { }
 
-private void MyClientDisconnect(TcpClient client) { }
+void MyClientDisconnect(TcpClient client) { }
 
-private void MyMessageReceived(Message message, TcpClient client) { }
+void MyMessageReceived(Message message, TcpClient client) { }
 
 server.StartListening();
 
@@ -24,7 +24,7 @@ server.StopListening();
 TCPClient client = new TCPClient("127.0.0.1", 1337);
 client.MessageReceived += MyMessageReceived;
 
-private void MyMessageReceived(Message message) { }
+void MyMessageReceived(Message message) { }
 
 client.Close();
 ```
@@ -33,7 +33,7 @@ client.Close();
 UDPServer server = new UDPServer(1337);
 server.MessageReceived += MyMessageReceived;
 
-private void MyMessageReceived(Message, message) { }
+void MyMessageReceived(Message, message) { }
 ```
 
 ```CSharp

@@ -1,5 +1,7 @@
 # NetworkServer
 
+A simple client/server library for Unity3D, Godot or any .NET application.
+
 ```CSharp
 TCPServer server = new TCPServer(1337);
 

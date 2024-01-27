@@ -364,13 +364,16 @@ namespace NetworkServer
             TcpClient tcpClient = (TcpClient)clientObj;
             NetworkStream clientStream = tcpClient.GetStream();
 
-            byte[] messageBuffer = new byte[maxReveiveSize];
+            byte[] messageBuffer;
             int bytesRead;
 
             try
             {
                 while (running)
                 {
+
+                    messageBuffer = new byte[maxReveiveSize];
+
                     bytesRead = clientStream.Read(messageBuffer, 0, maxReveiveSize);
 
                     if (bytesRead == 0)

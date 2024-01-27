@@ -227,12 +227,12 @@ namespace NetworkServer
         /// This event gets fired when data is received but its not in a valid format.
         /// </summary>
         /// <param name="message"></param>
-        protected virtual void OnMessageReceivedError(object packet)
+        protected virtual void OnMessageReceivedError(byte[] packet)
         {
             MessageReceivedError?.Invoke(packet);
         }
 
-        public event Action<object> MessageReceivedError;
+        public event Action<byte[]> MessageReceivedError;
 
     }
 
